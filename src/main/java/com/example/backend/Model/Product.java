@@ -9,7 +9,7 @@ public class Product {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Integer productId;
+    private Long productId;
     @Column(name = "product_name", nullable = false)
     private String productName;
 
@@ -18,7 +18,7 @@ public class Product {
     private Double cost;
 
     @Column(name = "stock_qty")
-    private Integer stockQty;
+    private Long stockQty;
 
     private Boolean available;
 
@@ -28,4 +28,7 @@ public class Product {
     @ManyToOne
     @JoinColumn(name = "category_id")
     private Category category;
+
+    @Column(name = "track_mode")
+    private String trackMode;
 }

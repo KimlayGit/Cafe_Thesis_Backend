@@ -5,6 +5,7 @@ import com.example.backend.Service.OrderService;
 import com.example.backend.dto.CreateOrderRequest;
 import com.example.backend.dto.PayOrderRequest;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -36,18 +37,19 @@ public class OrderController {
     }
 
     // ✅ Update status (optional)
+    // ✅ Update saved order items/status
     @PutMapping("/{id}")
     public ResponseEntity<Order> update(@PathVariable Integer id, @RequestBody CreateOrderRequest req) {
-        return ResponseEntity.ok(orderService.updateStatus(id, req.getOrderStatus()));
+        return ResponseEntity.ok(orderService.updateOrder(id, req));
     }
 
     // ✅ Cancel order (restore stock)
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Void> cancel(@PathVariable Integer id) {
         orderService.cancelOrder(id);
         return ResponseEntity.noContent().build();
     }
-
     // Optional: list all
     @GetMapping
     public ResponseEntity<List<Order>> getAll() {

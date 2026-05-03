@@ -23,6 +23,11 @@ public class OrderService {
     private final CustomerRepository customerRepo;
     private final CafeTableRepository tableRepo;
     private final PaymentRepository paymentRepo;
+    private final ProductIngredientRepository productIngredientRepo;
+    private final IngredientRepository ingredientRepo;
+    private final StockMovementRepository stockMovementRepo;
+    private final TelegramService telegramService;
+//    private final BakongService bakongService;
 
     public OrderService(
             OrderRepository orderRepo,
@@ -31,7 +36,11 @@ public class OrderService {
             UserRepository userRepo,
             CustomerRepository customerRepo,
             CafeTableRepository tableRepo,
-            PaymentRepository paymentRepo
+            PaymentRepository paymentRepo,
+            ProductIngredientRepository productIngredientRepo,
+            IngredientRepository ingredientRepo,
+            StockMovementRepository stockMovementRepo,
+            TelegramService telegramService
     ) {
         this.orderRepo = orderRepo;
         this.detailRepo = detailRepo;
@@ -40,6 +49,10 @@ public class OrderService {
         this.customerRepo = customerRepo;
         this.tableRepo = tableRepo;
         this.paymentRepo = paymentRepo;
+        this.productIngredientRepo = productIngredientRepo;
+        this.ingredientRepo = ingredientRepo;
+        this.stockMovementRepo = stockMovementRepo;
+        this.telegramService = telegramService;
     }
 
     // -------------------- READ --------------------
@@ -61,9 +74,9 @@ public class OrderService {
         }
 
         Order order = new Order();
-        order.setOrderDate(LocalDateTime.now());
         order.setOrderType(req.getOrderType() != null ? req.getOrderType() : "POS");
         order.setOrderStatus(req.getOrderStatus() != null ? req.getOrderStatus() : "SAVED");
+        order.setOrderDate(LocalDateTime.now());
         order.setTotalAmount(0.0);
 
         // user
@@ -104,13 +117,13 @@ public class OrderService {
             Product product = productRepo.findById(item.getProductId())
                     .orElseThrow(() -> new RuntimeException("Product not found: " + item.getProductId()));
 
-            int qty = item.getQuantity() == null ? 0 : item.getQuantity();
+            Long qty = item.getQuantity() == null ? 0 : item.getQuantity();
             if (qty <= 0) throw new RuntimeException("Quantity must be > 0");
 
-            if (product.getStockQty() < qty) {
-                // allow POS sale, but you can log it
-                System.out.println("LOW STOCK: " + product.getProductName()
-                        + " stock=" + product.getStockQty() + ", requested=" + qty);
+            if ("DIRECT".equalsIgnoreCase(product.getTrackMode())) {
+                if (product.getStockQty() < qty) {
+                    System.out.println("LOW STOCK: " + product.getProductName());
+                }
             }
 
             double unitPrice = (item.getUnitPrice() != null) ? item.getUnitPrice() : product.getPrice();
@@ -127,8 +140,7 @@ public class OrderService {
             savedOrder.getOrderDetails().add(detail);
 
             // reduce stock
-            product.setStockQty(product.getStockQty() - qty);
-            productRepo.save(product);
+            deductStock(product, qty, savedOrder.getOrderId());
         }
 
         savedOrder.setTotalAmount(total);
@@ -203,7 +215,7 @@ public class OrderService {
             Product product = productRepo.findById(item.getProductId())
                     .orElseThrow(() -> new RuntimeException("Product not found: " + item.getProductId()));
 
-            int qty = item.getQuantity() == null ? 0 : item.getQuantity();
+            Long qty = item.getQuantity() == null ? 0 : item.getQuantity();
             if (qty <= 0) throw new RuntimeException("Quantity must be > 0");
 
             if (product.getStockQty() < qty) {
@@ -225,8 +237,7 @@ public class OrderService {
             order.getOrderDetails().add(savedDetail);
 
             // reduce stock again
-            product.setStockQty(product.getStockQty() - qty);
-            productRepo.save(product);
+            deductStock(product, qty, order.getOrderId());
         }
 
         order.setTotalAmount(total);
@@ -269,7 +280,14 @@ public class OrderService {
 
         order.setPayment(savedPayment);
         order.setOrderStatus("PAID");
-
+        telegramService.sendMessage(
+                "✅ *Payment Successful*\n\n" +
+                        "🧾 Order ID: #" + order.getOrderId() + "\n" +
+                        "💰 Total: $" + order.getTotalAmount() + "\n" +
+                        "💵 Paid: $" + paid + "\n" +
+                        "🔄 Change: $" + change + "\n\n" +
+                        "📅 " + LocalDateTime.now()
+        );
         return orderRepo.save(order);
     }
 
@@ -278,11 +296,6 @@ public class OrderService {
     public Order updateStatus(Integer orderId, String status) {
         Order order = orderRepo.findById(orderId)
                 .orElseThrow(() -> new RuntimeException("Order not found: " + orderId));
-
-        // lock if paid
-        if ("PAID".equalsIgnoreCase(order.getOrderStatus())) {
-            throw new RuntimeException("Paid orders cannot be modified.");
-        }
 
         order.setOrderStatus(status);
         return orderRepo.save(order);
@@ -294,21 +307,86 @@ public class OrderService {
         Order order = orderRepo.findById(orderId)
                 .orElseThrow(() -> new RuntimeException("Order not found: " + orderId));
 
-        // lock if paid
-        if ("PAID".equalsIgnoreCase(order.getOrderStatus())) {
-            throw new RuntimeException("Paid orders cannot be cancelled.");
-        }
-
         List<OrderDetail> details = detailRepo.findByOrder_OrderId(orderId);
 
-        // restore stock
         for (OrderDetail d : details) {
-            Product p = d.getProduct();
-            p.setStockQty(p.getStockQty() + d.getQuantity());
-            productRepo.save(p);
+            restoreStock(d.getProduct(), d.getQuantity());
         }
 
         detailRepo.deleteAll(details);
         orderRepo.delete(order);
+    }
+    private void deductStock(Product product, Long qty, Integer orderId) {
+
+        // DIRECT stock items (bottled drinks etc)
+        if ("DIRECT".equalsIgnoreCase(product.getTrackMode())) {
+
+            if (product.getStockQty() < qty) {
+                throw new RuntimeException("Not enough stock for " + product.getProductName());
+            }
+
+            product.setStockQty(product.getStockQty() - qty);
+            productRepo.save(product);
+            return;
+        }
+
+        // INGREDIENT based products (coffee drinks)
+        List<ProductIngredient> recipe =
+                productIngredientRepo.findByProduct_ProductId(product.getProductId());
+
+        if (recipe.isEmpty()) {
+            throw new RuntimeException("Recipe not defined for " + product.getProductName());
+        }
+
+        for (ProductIngredient r : recipe) {
+
+            Ingredient ingredient = r.getIngredient();
+
+            double requiredQty = r.getQtyRequired() * qty;
+
+            if (ingredient.getStockQty() < requiredQty) {
+                throw new RuntimeException(
+                        "Not enough ingredient stock: " + ingredient.getIngredientName()
+                );
+            }
+
+            // subtract ingredient stock
+            ingredient.setStockQty(ingredient.getStockQty() - requiredQty);
+            ingredientRepo.save(ingredient);
+
+            // record movement
+            StockMovement movement = new StockMovement();
+            movement.setIngredient(ingredient);
+            movement.setMovementType("OUT");
+            movement.setQuantity(requiredQty);
+            movement.setReferenceType("ORDER");
+            movement.setReferenceId(orderId);
+            movement.setNote("Used for product: " + product.getProductName());
+
+            stockMovementRepo.save(movement);
+        }
+    }
+    private void restoreStock(Product product, Long qty) {
+
+        if ("DIRECT".equalsIgnoreCase(product.getTrackMode())) {
+
+            product.setStockQty(product.getStockQty() + qty);
+            productRepo.save(product);
+            return;
+        }
+
+        List<ProductIngredient> recipe =
+                productIngredientRepo.findByProduct_ProductId(product.getProductId());
+
+        for (ProductIngredient r : recipe) {
+
+            Ingredient ingredient = r.getIngredient();
+
+            double restoreQty = r.getQtyRequired() * qty;
+
+            ingredient.setStockQty(ingredient.getStockQty() + restoreQty);
+
+            ingredientRepo.save(ingredient);
+        }
     }
 }

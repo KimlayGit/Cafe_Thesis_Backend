@@ -1,12 +1,10 @@
 package com.example.backend.Controller;
 
-import com.example.backend.Model.Category;
 import com.example.backend.Model.Product;
 import com.example.backend.Repository.ProductRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
-import org.springframework.core.io.UrlResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -15,7 +13,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -36,9 +33,7 @@ public class ProductController {
         this.repo = repo;
     }
 
-    // ──────────────────────────────
     // Upload product image
-    // ──────────────────────────────
     @PostMapping(value = "/upload-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<String> uploadImage(@RequestParam("file") MultipartFile file) {
         if (file == null || file.isEmpty()) {
@@ -56,85 +51,72 @@ public class ProductController {
                     ? originalFilename.substring(originalFilename.lastIndexOf("."))
                     : ".jpg";
 
-            // Use UUID to avoid filename collisions & path traversal attacks
             String safeFilename = UUID.randomUUID() + extension;
             Path targetPath = uploadPath.resolve(safeFilename);
 
-            // Copy file safely
             Files.copy(file.getInputStream(), targetPath);
 
-            // Return URL that frontend can use in <img src="...">
             String imageUrl = "/api/products/images/" + safeFilename;
+
             return ResponseEntity.ok(imageUrl);
 
         } catch (IOException e) {
-            // In production: use logger instead of printStackTrace
             e.printStackTrace();
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body("Failed to upload image: " + e.getMessage());
         }
     }
 
-    // ──────────────────────────────
     // Serve uploaded images
-    // ──────────────────────────────
     @GetMapping("/images/{filename:.+}")
     public ResponseEntity<Resource> serveImage(@PathVariable String filename) {
 
-        // Basic protection against path traversal attacks
         if (filename == null || filename.trim().isEmpty() ||
                 filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
             return ResponseEntity.badRequest().build();
         }
 
         try {
-            // Resolve the file path safely
             Path filePath = Paths.get(uploadDir).resolve(filename).normalize();
 
-            // Use FileSystemResource (recommended - avoids URI/MalformedURLException issues)
             Resource resource = new FileSystemResource(filePath.toFile());
 
-            // Check if file exists and is readable
             if (!resource.exists() || !resource.isReadable()) {
                 return ResponseEntity.notFound().build();
             }
 
-            // Detect content type (jpg, png, etc.)
             String contentType = Files.probeContentType(filePath);
+
             MediaType mediaType = (contentType != null)
                     ? MediaType.parseMediaType(contentType)
                     : MediaType.APPLICATION_OCTET_STREAM;
 
-            // Build response with inline display (browser shows image instead of download)
             return ResponseEntity.ok()
                     .contentType(mediaType)
                     .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
-                    .header(HttpHeaders.CACHE_CONTROL, "max-age=3600") // optional: cache 1 hour
+                    .header(HttpHeaders.CACHE_CONTROL, "max-age=3600")
                     .body(resource);
 
         } catch (IOException e) {
-            // Log error (in production use proper logger like SLF4J)
             e.printStackTrace();
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(null);  // or return custom error message
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(null);
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Your existing CRUD endpoints (unchanged)
-    // ─────────────────────────────────────────────────────────────
-
+    // Create product
     @PostMapping
     public ResponseEntity<Product> create(@RequestBody Product body) {
         return ResponseEntity.ok(repo.save(body));
     }
 
+    // Get all products
     @GetMapping
     public ResponseEntity<List<Product>> getAll(
-            @RequestParam(required = false) Integer categoryId,
+            @RequestParam(required = false) Long categoryId,
             @RequestParam(required = false) String search,
             @RequestParam(required = false, defaultValue = "false") boolean available
     ) {
+
         String q = (search == null) ? null : search.trim();
         List<Product> result;
 
@@ -155,15 +137,17 @@ public class ProductController {
         return ResponseEntity.ok(result);
     }
 
+    // Get product by ID
     @GetMapping("/{id}")
-    public ResponseEntity<Product> getById(@PathVariable Integer id) {
+    public ResponseEntity<Product> getById(@PathVariable Long id) {
         return repo.findById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    // Update product
     @PutMapping("/{id}")
-    public ResponseEntity<Product> update(@PathVariable Integer id, @RequestBody Product body) {
+    public ResponseEntity<Product> update(@PathVariable Long id, @RequestBody Product body) {
         return repo.findById(id)
                 .map(existing -> {
                     body.setProductId(id);
@@ -172,10 +156,16 @@ public class ProductController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    // Delete product
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(@PathVariable Integer id) {
-        if (!repo.existsById(id)) return ResponseEntity.notFound().build();
+    public ResponseEntity<Void> delete(@PathVariable Long id) {
+
+        if (!repo.existsById(id)) {
+            return ResponseEntity.notFound().build();
+        }
+
         repo.deleteById(id);
+
         return ResponseEntity.noContent().build();
     }
 }

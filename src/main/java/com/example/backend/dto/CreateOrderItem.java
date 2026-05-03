@@ -4,7 +4,7 @@ import lombok.Data;
 
 @Data
 public class CreateOrderItem {
-    private Integer productId;
-    private Integer quantity;
+    private Long productId;
+    private Long quantity;
     private Double unitPrice;
 }

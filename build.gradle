@@ -27,7 +27,7 @@ dependencies {
 
     // 2. Database (JPA + SQL Server)
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
-    runtimeOnly 'com.microsoft.sqlserver:mssql-jdbc'
+    runtimeOnly 'com.microsoft.sqlserver:mssql-jdbc:12.6.3.jre11'
     // Optional: for local testing without SQL Server
     runtimeOnly 'com.h2database:h2'
 
@@ -46,6 +46,9 @@ dependencies {
     // 5. Testing
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.security:spring-security-test'
+
+    // Bakong SDK
+    implementation 'kh.gov.nbc.bakong_khqr:sdk-java:1.0.0.17'
 }
 
 tasks.named('test') {
